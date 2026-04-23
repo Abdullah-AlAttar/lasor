@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
+use serde::Deserialize;
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager,
     hotkey::{Code, HotKey, Modifiers},
@@ -13,7 +14,67 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// Radius of the main dot in logical pixels (before DPI scaling).
+    pub dot_radius: f32,
+    /// RGB color of the dot and trail [r, g, b], each 0-255.
+    pub dot_color: [u8; 3],
+    /// Opacity of the dot head, 0-255.
+    pub dot_alpha: u8,
+    /// Width of the white border stroke around the dot head.
+    pub dot_stroke_width: f32,
+    /// Opacity of the dot border, 0-255.
+    pub dot_stroke_alpha: u8,
+    /// How long (seconds) a trail point remains visible.
+    pub trail_duration_secs: f32,
+    /// Maximum radius of trail blobs (at the head end).
+    pub trail_max_radius: f32,
+    /// Minimum radius of trail blobs (at the tail end).
+    pub trail_min_radius: f32,
+    /// Maximum opacity of trail blobs, 0-255.
+    pub trail_alpha_max: u8,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dot_radius: 10.0,
+            dot_color: [220, 30, 30],
+            dot_alpha: 220,
+            dot_stroke_width: 2.0,
+            dot_stroke_alpha: 180,
+            trail_duration_secs: 1.8,
+            trail_max_radius: 12.0,
+            trail_min_radius: 3.0,
+            trail_alpha_max: 180,
+        }
+    }
+}
+
+/// Load `lasor.toml` from next to the executable, falling back to defaults.
+fn load_config() -> Config {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("lasor.toml")))
+        .unwrap_or_else(|| std::path::PathBuf::from("lasor.toml"));
+
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("[lasor] failed to parse {}: {e}; using defaults", path.display());
+            Config::default()
+        }),
+        Err(_) => Config::default(),
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    let cfg = load_config();
     let laser_on = Arc::new(AtomicBool::new(false));
     let laser_on_hotkey = laser_on.clone();
 
@@ -79,6 +140,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |_cc| {
             Ok(Box::new(LasorApp {
                 laser_on: laser_on.clone(),
+                cfg,
                 virt_x,
                 virt_y,
                 virt_w,
@@ -98,11 +160,9 @@ struct TrailPoint {
     time: Instant,
 }
 
-const TRAIL_DURATION_SECS: f32 = 1.8;
-const TRAIL_MAX_RADIUS: f32 = 12.0;
-
 struct LasorApp {
     laser_on: Arc<AtomicBool>,
+    cfg: Config,
     /// Physical coords of the virtual screen bounding box (all monitors combined).
     virt_x: i32,
     virt_y: i32,
@@ -197,7 +257,7 @@ impl eframe::App for LasorApp {
         }
 
         // Drop expired trail points
-        let cutoff = TRAIL_DURATION_SECS;
+        let cutoff = self.cfg.trail_duration_secs;
         self.trail.retain(|p| p.time.elapsed().as_secs_f32() < cutoff);
 
         // Always repaint to stay responsive
@@ -209,26 +269,41 @@ impl eframe::App for LasorApp {
                 let painter = ui.painter();
                 let trail_len = self.trail.len();
 
+                let [cr, cg, cb] = self.cfg.dot_color;
+
                 // Draw trail (oldest first, fading + shrinking)
                 for (i, tp) in self.trail.iter().enumerate() {
                     let age = tp.time.elapsed().as_secs_f32();
-                    let t = 1.0 - (age / TRAIL_DURATION_SECS);
+                    let t = 1.0 - (age / self.cfg.trail_duration_secs);
                     let pos_t = (i + 1) as f32 / trail_len.max(1) as f32;
                     let blend = (t * pos_t).powf(0.5);
-                    let alpha = (blend * 180.0) as u8;
-                    let radius = (3.0 + blend * (TRAIL_MAX_RADIUS - 3.0)) * monitor_scale;
+                    let alpha = (blend * self.cfg.trail_alpha_max as f32) as u8;
+                    let radius = (self.cfg.trail_min_radius
+                        + blend * (self.cfg.trail_max_radius - self.cfg.trail_min_radius))
+                        * monitor_scale;
                     painter.circle_filled(
                         tp.pos,
                         radius,
-                        egui::Color32::from_rgba_unmultiplied(220, 30, 30, alpha),
+                        egui::Color32::from_rgba_unmultiplied(cr, cg, cb, alpha),
                     );
                 }
 
                 // Draw head circle
                 if let Some(pos) = self.pointer_pos {
-                    let r = 10.0 * monitor_scale;
-                    painter.circle_filled(pos, r, egui::Color32::from_rgba_unmultiplied(220, 30, 30, 220));
-                    painter.circle_stroke(pos, r, egui::Stroke::new(2.0 * monitor_scale, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)));
+                    let r = self.cfg.dot_radius * monitor_scale;
+                    painter.circle_filled(
+                        pos,
+                        r,
+                        egui::Color32::from_rgba_unmultiplied(cr, cg, cb, self.cfg.dot_alpha),
+                    );
+                    painter.circle_stroke(
+                        pos,
+                        r,
+                        egui::Stroke::new(
+                            self.cfg.dot_stroke_width * monitor_scale,
+                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, self.cfg.dot_stroke_alpha),
+                        ),
+                    );
                 }
             });
     }

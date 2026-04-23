@@ -8,6 +8,8 @@ eframe = { version = "0.31", features = ["wgpu"] }
 egui = "0.31"
 global-hotkey = "0.6"
 winit = "0.30"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_HiDpi", "Win32_Graphics_Gdi"] }

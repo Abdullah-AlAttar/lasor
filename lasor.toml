@@ -1,0 +1,30 @@
+# lasor configuration
+# Copy this file next to the lasor executable to override defaults.
+# All fields are optional — missing fields fall back to the built-in defaults.
+
+# Radius of the main dot head in logical pixels (before DPI scaling).
+dot_radius = 5.0
+
+# RGB color used for both the dot and the trail [r, g, b], each 0–255.
+dot_color = [220, 30, 30]
+
+# Opacity of the dot head (0 = invisible, 255 = fully opaque).
+dot_alpha = 220
+
+# Width of the white border around the dot head, in logical pixels.
+dot_stroke_width = 2.0
+
+# Opacity of the dot border (0–255).
+dot_stroke_alpha = 180
+
+# How many seconds a trail point stays visible before fading out.
+trail_duration_secs = 1.8
+
+# Maximum radius of trail blobs (near the head), in logical pixels.
+trail_max_radius = 12.0
+
+# Minimum radius of trail blobs (at the tail end), in logical pixels.
+trail_min_radius = 3.0
+
+# Maximum opacity of trail blobs (0–255).
+trail_alpha_max = 180
