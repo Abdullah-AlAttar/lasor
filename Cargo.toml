@@ -1,0 +1,17 @@
+[package]
+name = "lasor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.31", features = ["wgpu"] }
+egui = "0.31"
+global-hotkey = "0.6"
+winit = "0.30"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[profile.release]
+opt-level = 3
+
