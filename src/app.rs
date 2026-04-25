@@ -42,6 +42,9 @@ pub struct LasorApp {
     current_stroke: Vec<egui::Pos2>,
 
     // ── Toolbar ────────────────────────────────────────────────────────────
+    /// Free position of the toolbar (top-left corner).
+    /// `None` until the first frame when screen dimensions are known.
+    toolbar_pos: Option<egui::Pos2>,
     /// Screen-space rect of the toolbar, updated every frame.
     /// Used to decide when to disable mouse passthrough.
     toolbar_rect: egui::Rect,
@@ -61,6 +64,7 @@ impl LasorApp {
             trail: VecDeque::new(),
             strokes: Vec::new(),
             current_stroke: Vec::new(),
+            toolbar_pos: None,
             // Rect::NOTHING has inverted min/max so `contains` always returns
             // false – safe to use as an "uninitialised" sentinel.
             toolbar_rect: egui::Rect::NOTHING,
@@ -229,8 +233,15 @@ impl LasorApp {
     // -----------------------------------------------------------------------
 
     fn show_toolbar(&mut self, ctx: &egui::Context) {
+        // Lazy-initialise position to the bottom-right corner on the first
+        // frame, once actual screen dimensions are available from the context.
+        let pos = *self.toolbar_pos.get_or_insert_with(|| {
+            let s = ctx.screen_rect();
+            egui::pos2(s.right() - 310.0, s.bottom() - 62.0)
+        });
+
         let inner_resp = egui::Area::new(egui::Id::new("lasor_toolbar"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+            .fixed_pos(pos)
             .interactable(true)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -244,10 +255,45 @@ impl LasorApp {
                     .inner_margin(egui::Margin::symmetric(10, 7));
 
                 panel_frame.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-                    ui.spacing_mut().button_padding = egui::vec2(12.0, 7.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
 
                     ui.horizontal(|ui| {
+                        // ── Drag handle ────────────────────────────────────
+                        // A 2×3 dot grid; allocating with Sense::drag() makes
+                        // the whole rect respond to click-drag without
+                        // consuming clicks meant for the buttons.
+                        let (grip_rect, grip_resp) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 24.0), egui::Sense::drag());
+                        let grip_color = if grip_resp.hovered() || grip_resp.dragged() {
+                            egui::Color32::from_rgba_unmultiplied(220, 220, 220, 220)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(120, 120, 120, 180)
+                        };
+                        let c = grip_rect.center();
+                        for row in 0..3i32 {
+                            for col in 0..2i32 {
+                                ui.painter().circle_filled(
+                                    c + egui::vec2(
+                                        (col as f32 - 0.5) * 5.0,
+                                        (row as f32 - 1.0) * 6.0,
+                                    ),
+                                    1.5,
+                                    grip_color,
+                                );
+                            }
+                        }
+                        if grip_resp.dragged() {
+                            if let Some(p) = self.toolbar_pos.as_mut() {
+                                *p += grip_resp.drag_delta();
+                            }
+                        }
+                        if grip_resp.hovered() || grip_resp.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+
+                        ui.add(egui::Separator::default().vertical().spacing(4.0));
+
                         // ── Laser ──────────────────────────────────────────
                         let laser_active = self.mode == Mode::Laser;
                         let laser_fill = if laser_active {
@@ -305,7 +351,6 @@ impl LasorApp {
                             }
                         }
 
-                        // ── Separator ──────────────────────────────────────
                         ui.add(egui::Separator::default().vertical().spacing(4.0));
 
                         // ── Clear ──────────────────────────────────────────
@@ -321,12 +366,41 @@ impl LasorApp {
                             self.strokes.clear();
                             self.current_stroke.clear();
                         }
+
+                        ui.add(egui::Separator::default().vertical().spacing(4.0));
+
+                        // ── Close / exit ───────────────────────────────────
+                        let close_btn = egui::Button::new(
+                            egui::RichText::new("❌")
+                                .size(13.0)
+                                .color(egui::Color32::from_rgb(200, 140, 140)),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .corner_radius(egui::CornerRadius::same(6));
+
+                        if ui.add(close_btn).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                     });
                 });
             });
 
+        // Clamp so the toolbar can never be dragged fully off-screen.
+        let screen = ctx.screen_rect();
+        let tb = inner_resp.response.rect;
+        if let Some(p) = self.toolbar_pos.as_mut() {
+            p.x = p.x.clamp(
+                screen.left(),
+                (screen.right() - tb.width()).max(screen.left()),
+            );
+            p.y = p.y.clamp(
+                screen.top(),
+                (screen.bottom() - tb.height()).max(screen.top()),
+            );
+        }
+
         // Keep the toolbar rect up-to-date for next frame's passthrough check.
-        self.toolbar_rect = inner_resp.response.rect;
+        self.toolbar_rect = tb;
     }
 }
 
