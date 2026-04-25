@@ -1,5 +1,59 @@
 use eframe::egui;
 
+// ---------------------------------------------------------------------------
+// Primary monitor helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the bottom-right corner of the **primary** monitor in egui logical
+/// coordinates (relative to the virtual-screen top-left).
+///
+/// On Windows the primary monitor is always anchored at physical (0, 0), so
+/// its size is given directly by `SM_CXSCREEN` / `SM_CYSCREEN`.  We then
+/// subtract the virtual-screen origin (`virt_x`, `virt_y`) and divide by
+/// `pixels_per_point` to arrive at egui-space coordinates.
+#[cfg(windows)]
+pub fn primary_monitor_bottom_right(ctx: &egui::Context, virt_x: i32, virt_y: i32) -> egui::Pos2 {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA, SystemParametersInfoW,
+    };
+
+    // Prefer the work area (excludes taskbar / desktop toolbars) so the
+    // toolbar is never placed behind the system taskbar.
+    let mut rc = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut rc as *mut RECT as *mut core::ffi::c_void,
+            0,
+        )
+    };
+    let (r, b) = if ok != 0 {
+        (rc.right, rc.bottom)
+    } else {
+        // Fallback: full screen dimensions if SPI_GETWORKAREA fails.
+        let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        (w, h)
+    };
+
+    let ppp = ctx.pixels_per_point();
+    egui::pos2((r - virt_x) as f32 / ppp, (b - virt_y) as f32 / ppp)
+}
+
+/// Fallback for non-Windows: use the bottom-right of whatever screen rect
+/// egui reports (typically the primary monitor on single-monitor setups).
+#[cfg(not(windows))]
+pub fn primary_monitor_bottom_right(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> egui::Pos2 {
+    ctx.screen_rect().max
+}
+
 /// Returns `(cursor_pos, monitor_scale)` where:
 /// - `cursor_pos` is the OS cursor position in egui logical coordinates
 ///   relative to the virtual-screen top-left corner.
