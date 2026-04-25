@@ -46,6 +46,11 @@
       "sourceType": "github",
       "computedHash": "6ff3b31bae02e84238a75845008150122071ba449b23edb9ea8a50e3635fffb7"
     },
+    "m10-performance": {
+      "source": "actionbook/rust-skills",
+      "sourceType": "github",
+      "computedHash": "c0e093f630ec71079aa7a138af376821e3cc24dfb129f7162e82d854e26a1087"
+    },
     "m12-lifecycle": {
       "source": "actionbook/rust-skills",
       "sourceType": "github",

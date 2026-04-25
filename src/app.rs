@@ -60,6 +60,8 @@ pub struct LasorApp {
     /// Screen-space rect of the toolbar, updated every frame.
     /// Used to decide when to disable mouse passthrough.
     toolbar_rect: egui::Rect,
+    /// Last passthrough value sent to the OS; only re-sent when it changes.
+    last_passthrough: bool,
 }
 
 impl LasorApp {
@@ -81,6 +83,12 @@ impl LasorApp {
             // Rect::NOTHING has inverted min/max so `contains` always returns
             // false – safe to use as an "uninitialised" sentinel.
             toolbar_rect: egui::Rect::NOTHING,
+            // Start with `false` so the very first frame always sends the
+            // passthrough command (the window is not passthrough by default).
+            // On frame 1, should_passthrough() will typically return `true`
+            // (cursor away from toolbar, Idle mode) and `true != false` fires
+            // the send, putting the window into click-through mode immediately.
+            last_passthrough: false,
         }
     }
 
@@ -351,10 +359,13 @@ impl LasorApp {
         //              Compute the exact top-left that places the toolbar's
         //              bottom-right at `br - TOOLBAR_EDGE_MARGIN`, then lock
         //              toolbar_pos to Some so subsequent drags work normally.
-        let br = platform::primary_monitor_bottom_right(ctx, virt_x, virt_y);
+        // `primary_monitor_bottom_right` calls SPI_GETWORKAREA on Windows.
+        // Only invoke it while toolbar_pos is still unknown (first two frames);
+        // after that the position is locked and `br` is never used again.
         let pos = if let Some(p) = self.toolbar_pos {
             p
         } else {
+            let br = platform::primary_monitor_bottom_right(ctx, virt_x, virt_y);
             let (tw, th) = (self.toolbar_rect.width(), self.toolbar_rect.height());
             if tw > 0.0 && th > 0.0 {
                 let m = TOOLBAR_EDGE_MARGIN;
@@ -565,9 +576,14 @@ impl eframe::App for LasorApp {
         let (cursor_pos, monitor_scale) = platform::cursor_info(ctx, self.virt_x, self.virt_y);
 
         // ── Dynamic passthrough ────────────────────────────────────────────
-        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(
-            self.should_passthrough(cursor_pos),
-        ));
+        // Only issue the viewport command when the value actually changes;
+        // sending it every frame forces an OS window-style round-trip each
+        // repaint even when the passthrough state is stable.
+        let passthrough = self.should_passthrough(cursor_pos);
+        if passthrough != self.last_passthrough {
+            self.last_passthrough = passthrough;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(passthrough));
+        }
 
         // Draw mode uses a crosshair; egui still shows pointer over buttons.
         if self.mode == Mode::Draw {
@@ -589,7 +605,14 @@ impl eframe::App for LasorApp {
 
         // ── Repaint scheduling ─────────────────────────────────────────────
         match self.mode {
-            Mode::Idle => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+            Mode::Idle => {
+                // 200 ms gives ~5 fps of cursor-position polling.  This is
+                // more than fast enough to detect when the cursor enters the
+                // toolbar area and disable passthrough.  When passthrough is
+                // already OFF, egui repaints immediately on every mouse-move
+                // event anyway, so toolbar responsiveness is unaffected.
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
             _ => ctx.request_repaint(),
         }
 
