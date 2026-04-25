@@ -8,8 +8,10 @@ use crate::platform;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Padding from the screen edge when auto-positioning the toolbar (logical px).
-const TOOLBAR_EDGE_MARGIN: f32 = 10.0;
+/// Horizontal padding from the right monitor edge when auto-positioning the toolbar (logical px).
+const TOOLBAR_MARGIN_X: f32 = 40.0;
+/// Vertical padding from the bottom monitor edge when auto-positioning the toolbar (logical px).
+const TOOLBAR_MARGIN_Y: f32 = 10.0;
 
 /// Preset colour swatches shown in the palette popup while Draw mode is active.
 const DRAW_PALETTE: &[([u8; 3], &str)] = &[
@@ -47,8 +49,7 @@ impl LasorApp {
             let br = platform::primary_monitor_bottom_right(ctx, virt_x, virt_y);
             let (tw, th) = (self.toolbar_rect.width(), self.toolbar_rect.height());
             if tw > 0.0 && th > 0.0 {
-                let m = TOOLBAR_EDGE_MARGIN;
-                let p = egui::pos2(br.x - tw - m, br.y - th - m);
+                let p = egui::pos2(br.x - tw - TOOLBAR_MARGIN_X, br.y - th - TOOLBAR_MARGIN_Y);
                 self.toolbar_pos = Some(p);
                 p
             } else {
