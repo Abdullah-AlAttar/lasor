@@ -199,14 +199,23 @@ impl LasorApp {
     }
 
     fn update_draw(&mut self, ctx: &egui::Context) {
-        let (pressed, released, down, pos_opt) = ctx.input(|i| {
+        let (pressed, released, down, pos_opt, undo) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
                 i.pointer.primary_down(),
                 i.pointer.latest_pos(),
+                i.key_pressed(egui::Key::Z) && i.modifiers.ctrl,
             )
         });
+
+        if undo {
+            if !self.current_stroke.is_empty() {
+                self.current_stroke.clear();
+            } else {
+                self.strokes.pop();
+            }
+        }
 
         let Some(pos) = pos_opt else { return };
 
