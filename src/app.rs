@@ -16,6 +16,18 @@ use crate::platform;
 /// Padding from the screen edge when auto-positioning the toolbar (logical px).
 const TOOLBAR_EDGE_MARGIN: f32 = 10.0;
 
+/// Preset colour swatches shown in the toolbar while Draw mode is active.
+const DRAW_PALETTE: &[([u8; 3], &str)] = &[
+    ([255, 220, 0], "Yellow"),
+    ([255, 80, 80], "Red"),
+    ([255, 160, 0], "Orange"),
+    ([80, 220, 80], "Green"),
+    ([0, 200, 255], "Cyan"),
+    ([80, 120, 255], "Blue"),
+    ([220, 80, 220], "Magenta"),
+    ([255, 255, 255], "White"),
+];
+
 // ---------------------------------------------------------------------------
 // Trail point
 // ---------------------------------------------------------------------------
@@ -48,8 +60,8 @@ pub struct LasorApp {
     trail: VecDeque<TrailPoint>,
 
     // ── Draw / annotation state ────────────────────────────────────────────
-    /// Completed strokes; each stroke is a list of points.
-    strokes: Vec<Vec<egui::Pos2>>,
+    /// Completed strokes; each entry is (points, rgb_color).
+    strokes: Vec<(Vec<egui::Pos2>, [u8; 3])>,
     /// The stroke currently being drawn (mouse held down).
     current_stroke: Vec<egui::Pos2>,
 
@@ -62,12 +74,18 @@ pub struct LasorApp {
     toolbar_rect: egui::Rect,
     /// Last passthrough value sent to the OS; only re-sent when it changes.
     last_passthrough: bool,
+    /// Currently selected drawing colour (RGB); overrides `cfg.draw_color` at runtime.
+    draw_color_rgb: [u8; 3],
+    /// Whether the colour palette is expanded in the toolbar.
+    show_color_picker: bool,
 }
 
 impl LasorApp {
     pub fn new(cfg: Config, virt_x: i32, virt_y: i32, virt_w: i32, virt_h: i32) -> Self {
+        let draw_color_rgb = cfg.draw_color;
         Self {
             cfg,
+            draw_color_rgb,
             mode: Mode::Idle,
             virt_x,
             virt_y,
@@ -89,6 +107,7 @@ impl LasorApp {
             // (cursor away from toolbar, Idle mode) and `true != false` fires
             // the send, putting the window into click-through mode immediately.
             last_passthrough: false,
+            show_color_picker: false,
         }
     }
 
@@ -131,7 +150,7 @@ impl LasorApp {
             };
             let title: Vec<u16> = "lasor\0".encode_utf16().collect();
             let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-            if hwnd != std::ptr::null_mut() {
+            if !hwnd.is_null() {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -171,10 +190,7 @@ impl LasorApp {
             let steps = ((dist / STEP).ceil() as usize).max(1);
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
-                let p = egui::pos2(
-                    start.x + (cursor.x - start.x) * t,
-                    start.y + (cursor.y - start.y) * t,
-                );
+                let p = start.lerp(cursor, t);
                 self.trail.push_back(TrailPoint { pos: p, time: now });
             }
         } else {
@@ -182,7 +198,7 @@ impl LasorApp {
             if self
                 .trail
                 .back()
-                .map_or(true, |tp| tp.pos.distance(cursor) > 0.5)
+                .is_none_or(|tp| tp.pos.distance(cursor) > 0.5)
             {
                 self.trail.push_back(TrailPoint {
                     pos: cursor,
@@ -223,7 +239,7 @@ impl LasorApp {
         if self.toolbar_rect.expand(4.0).contains(pos) {
             if !self.current_stroke.is_empty() {
                 let stroke = std::mem::take(&mut self.current_stroke);
-                self.strokes.push(stroke);
+                self.strokes.push((stroke, self.draw_color_rgb));
             }
             return;
         }
@@ -235,13 +251,13 @@ impl LasorApp {
             let far_enough = self
                 .current_stroke
                 .last()
-                .map_or(true, |last| last.distance(pos) > 2.0);
+                .is_none_or(|last| last.distance(pos) > 2.0);
             if far_enough {
                 self.current_stroke.push(pos);
             }
         } else if released && !self.current_stroke.is_empty() {
             let stroke = std::mem::take(&mut self.current_stroke);
-            self.strokes.push(stroke);
+            self.strokes.push((stroke, self.draw_color_rgb));
         }
     }
 
@@ -250,15 +266,18 @@ impl LasorApp {
     // -----------------------------------------------------------------------
 
     fn paint_overlay(&self, painter: &egui::Painter, monitor_scale: f32) {
-        let [dr, dg, db] = self.cfg.draw_color;
-        let draw_color = egui::Color32::from_rgba_unmultiplied(dr, dg, db, self.cfg.draw_alpha);
-        let draw_stroke = egui::Stroke::new(self.cfg.draw_width * monitor_scale, draw_color);
-
         // ── Annotation strokes (always visible, even in Laser / Idle mode) ─
-        for stroke in &self.strokes {
+        // Each completed stroke carries its own colour captured at draw time.
+        for (stroke, color_rgb) in &self.strokes {
+            let [dr, dg, db] = *color_rgb;
+            let draw_color = egui::Color32::from_rgba_unmultiplied(dr, dg, db, self.cfg.draw_alpha);
+            let draw_stroke = egui::Stroke::new(self.cfg.draw_width * monitor_scale, draw_color);
             Self::paint_stroke(painter, stroke, draw_stroke);
         }
         if !self.current_stroke.is_empty() {
+            let [dr, dg, db] = self.draw_color_rgb;
+            let draw_color = egui::Color32::from_rgba_unmultiplied(dr, dg, db, self.cfg.draw_alpha);
+            let draw_stroke = egui::Stroke::new(self.cfg.draw_width * monitor_scale, draw_color);
             Self::paint_stroke(painter, &self.current_stroke, draw_stroke);
         }
 
@@ -399,6 +418,10 @@ impl LasorApp {
                         self.draw_grip_handle(ui);
                         ui.add(egui::Separator::default().vertical().spacing(4.0));
                         self.toolbar_mode_buttons(ui);
+                        if self.mode == Mode::Draw && self.show_color_picker {
+                            ui.add(egui::Separator::default().vertical().spacing(4.0));
+                            self.toolbar_color_picker(ui);
+                        }
                         ui.add(egui::Separator::default().vertical().spacing(4.0));
                         self.toolbar_action_buttons(ui);
                     });
@@ -431,10 +454,10 @@ impl LasorApp {
             }
         }
 
-        if grip_resp.dragged() {
-            if let Some(p) = self.toolbar_pos.as_mut() {
-                *p += grip_resp.drag_delta();
-            }
+        if grip_resp.dragged()
+            && let Some(p) = self.toolbar_pos.as_mut()
+        {
+            *p += grip_resp.drag_delta();
         }
         if grip_resp.hovered() || grip_resp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -479,11 +502,88 @@ impl LasorApp {
                 // Entering draw: clear stale laser state.
                 self.trail.clear();
                 self.pointer_pos = None;
-            } else if !self.current_stroke.is_empty() {
-                // Leaving draw: commit the in-progress stroke.
-                let s = std::mem::take(&mut self.current_stroke);
-                self.strokes.push(s);
+            } else {
+                // Leaving draw: collapse the palette and commit any in-progress stroke.
+                self.show_color_picker = false;
+                if !self.current_stroke.is_empty() {
+                    let s = std::mem::take(&mut self.current_stroke);
+                    self.strokes.push((s, self.draw_color_rgb));
+                }
             }
+        }
+
+        // ── Draw colour toggle ─────────────────────────────────────────────
+        if self.mode == Mode::Draw {
+            self.toolbar_color_toggle(ui);
+        }
+    }
+
+    /// Small coloured-circle button that toggles the palette open/closed.
+    /// Only rendered when Draw mode is active.
+    fn toolbar_color_toggle(&mut self, ui: &mut egui::Ui) {
+        let [r, g, b] = self.draw_color_rgb;
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+
+        let painter = ui.painter();
+        // Button background – brighter when the palette is open.
+        let bg = if self.show_color_picker {
+            egui::Color32::from_rgba_unmultiplied(90, 90, 90, 230)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(55, 55, 55, 200)
+        };
+        painter.rect_filled(rect, egui::CornerRadius::same(6), bg);
+        // Current colour disc.
+        painter.circle_filled(
+            rect.center(),
+            8.0,
+            egui::Color32::from_rgba_unmultiplied(r, g, b, self.cfg.draw_alpha),
+        );
+        // White ring when palette is open.
+        if self.show_color_picker {
+            painter.circle_stroke(
+                rect.center(),
+                9.0,
+                egui::Stroke::new(1.5, egui::Color32::WHITE),
+            );
+        }
+
+        if resp.clicked() {
+            self.show_color_picker = !self.show_color_picker;
+        }
+        resp.on_hover_text("Pick colour");
+    }
+
+    /// Colour palette swatches; only shown while Draw mode is active.
+    fn toolbar_color_picker(&mut self, ui: &mut egui::Ui) {
+        let alpha = self.cfg.draw_alpha;
+        for &([r, g, b], label) in DRAW_PALETTE {
+            let is_selected = self.draw_color_rgb == [r, g, b];
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+
+            if resp.clicked() {
+                self.draw_color_rgb = [r, g, b];
+            }
+
+            let painter = ui.painter();
+            // Selection ring / hover highlight
+            if is_selected {
+                painter.circle_filled(rect.center(), 9.5, egui::Color32::WHITE);
+            } else if resp.hovered() {
+                painter.circle_filled(
+                    rect.center(),
+                    9.5,
+                    egui::Color32::from_rgba_unmultiplied(200, 200, 200, 120),
+                );
+            }
+            // Colour disc
+            let swatch_color = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
+            painter.circle_filled(
+                rect.center(),
+                if is_selected { 7.0 } else { 8.0 },
+                swatch_color,
+            );
+
+            resp.on_hover_text(label);
         }
     }
 
