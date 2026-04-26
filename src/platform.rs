@@ -114,16 +114,20 @@ pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Po
 
             if let Some((conn, screen_num)) = guard.as_ref() {
                 let root = conn.setup().roots[*screen_num].root;
-                match conn.query_pointer(root).and_then(|c| c.reply()) {
-                    Ok(reply) => {
-                        let ppp = ctx.pixels_per_point();
-                        return Some(egui::pos2(
-                            reply.root_x as f32 / ppp,
-                            reply.root_y as f32 / ppp,
-                        ));
-                    }
+                match conn.query_pointer(root) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(reply) => {
+                            let ppp = ctx.pixels_per_point();
+                            return Some(egui::pos2(
+                                reply.root_x as f32 / ppp,
+                                reply.root_y as f32 / ppp,
+                            ));
+                        }
+                        Err(_) => {
+                            *guard = None;
+                        }
+                    },
                     Err(_) => {
-                        // Connection is dead; drop it so the next frame reconnects.
                         *guard = None;
                     }
                 }
