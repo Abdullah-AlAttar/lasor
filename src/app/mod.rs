@@ -200,12 +200,11 @@ impl eframe::App for LasorApp {
         // ── Repaint scheduling ─────────────────────────────────────────────
         match self.mode {
             Mode::Idle => {
-                // 200 ms gives ~5 fps of cursor-position polling.  This is
-                // more than fast enough to detect when the cursor enters the
-                // toolbar area and disable passthrough.  When passthrough is
-                // already OFF, egui repaints immediately on every mouse-move
-                // event anyway, so toolbar responsiveness is unaffected.
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                // 16 ms (~60 fps) cursor-position polling.  We need to detect
+                // cursor-over-toolbar and disable passthrough before a click
+                // lands; 200 ms was too slow — users could move to the toolbar
+                // and click before the next repaint turned passthrough off.
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
             _ => ctx.request_repaint(),
         }
