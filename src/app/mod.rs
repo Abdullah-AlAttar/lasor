@@ -57,7 +57,11 @@ pub struct LasorApp {
     /// Screen-space rect of the toolbar, updated every frame.
     /// Used to decide when to disable mouse passthrough.
     pub(crate) toolbar_rect: egui::Rect,
-    /// Last passthrough value sent to the OS; only re-sent when it changes.
+    /// Last passthrough value sent to the OS (non-Linux only).
+    /// On Linux passthrough is driven by X11 input shape; this field is kept
+    /// so `should_passthrough` still has something to compare against and
+    /// `last_passthrough` is not flagged as dead code.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     last_passthrough: bool,
     /// Currently selected drawing colour (RGB); overrides `cfg.draw_color` at runtime.
     pub(crate) draw_color_rgb: [u8; 3],
@@ -176,6 +180,11 @@ impl eframe::App for LasorApp {
         let passthrough = self.should_passthrough(cursor_pos);
         if passthrough != self.last_passthrough {
             self.last_passthrough = passthrough;
+            // On Linux the X11 input shape (set at the bottom of update()) is
+            // the authoritative passthrough mechanism.  The viewport command is
+            // processed *after* update() returns and would override any
+            // shape_rectangles call made inside the frame, so we skip it here.
+            #[cfg(not(target_os = "linux"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(passthrough));
         }
 
@@ -222,5 +231,16 @@ impl eframe::App for LasorApp {
 
         self.show_toolbar(ctx);
         self.show_color_palette_popup(ctx);
+
+        // On Linux: update the X11 input shape so only the toolbar rect (or
+        // the full window in Draw mode) receives mouse events.  This replaces
+        // the `send_viewport_cmd(MousePassthrough)` path which is unreliable
+        // because viewport commands are flushed after update() returns.
+        #[cfg(target_os = "linux")]
+        platform::update_input_shape(
+            self.toolbar_rect,
+            self.mode == Mode::Draw,
+            ctx.pixels_per_point(),
+        );
     }
 }

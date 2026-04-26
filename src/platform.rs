@@ -86,39 +86,19 @@ pub fn cursor_info(ctx: &egui::Context, virt_x: i32, virt_y: i32) -> (egui::Pos2
 
 #[cfg(not(windows))]
 pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Pos2, f32) {
-    // On Linux with X11 we query the cursor position directly via XQueryPointer.
-    // This mirrors GetCursorPos on Windows: it works even when the overlay
-    // window has mouse passthrough enabled and receives no pointer events.
-    // Without this the egui fallback always returns Pos2::ZERO, which is never
-    // inside the toolbar rect, so the window stays permanently click-through.
     #[cfg(target_os = "linux")]
     {
-        use std::cell::RefCell;
         use x11rb::connection::Connection;
         use x11rb::protocol::xproto::ConnectionExt;
-        use x11rb::rust_connection::RustConnection;
 
-        thread_local! {
-            // Open once per thread and reuse; clear on error so we reconnect.
-            static X11: RefCell<Option<(RustConnection, usize)>> =
-                RefCell::new(x11rb::connect(None).ok());
-        }
-
-        let queried = X11.with(|cell| {
+        let queried = LINUX_X11.with(|cell| {
             let mut guard = cell.borrow_mut();
-
-            // Lazy-reconnect if the connection was previously dropped.
             if guard.is_none() {
-                *guard = x11rb::connect(None).ok();
+                *guard = linux_x11_connect();
             }
-
-            // Use a flag so we can drop the immutable borrow on `guard`
-            // (held by `conn`) before mutating it.  The borrow checker
-            // requires the immutable borrow to end before `*guard = None`.
             let mut clear = false;
-            let result = if let Some((conn, screen_num)) = guard.as_ref() {
-                let root = conn.setup().roots[*screen_num].root;
-                match conn.query_pointer(root) {
+            let result = if let Some(state) = guard.as_ref() {
+                match state.conn.query_pointer(state.root) {
                     Ok(cookie) => match cookie.reply() {
                         Ok(reply) => {
                             let ppp = ctx.pixels_per_point();
@@ -140,7 +120,6 @@ pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Po
             } else {
                 None
             };
-            // Immutable borrow on `guard` has ended; safe to mutate now.
             if clear {
                 *guard = None;
             }
@@ -159,4 +138,156 @@ pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Po
             .unwrap_or(egui::Pos2::ZERO),
         1.0_f32,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Linux X11 – shared connection state
+// ---------------------------------------------------------------------------
+//
+// Both `cursor_info` (XQueryPointer) and `update_input_shape` (XShapeInput)
+// need an X11 connection.  We keep it in a thread-local struct so it is opened
+// once and reused, with a lazy-reconnect on error.
+//
+// IMPORTANT: `update_input_shape` MUST be the mechanism used on Linux to
+// control which areas of the overlay receive mouse input.  The egui
+// `ViewportCommand::MousePassthrough` path is processed *after* `update()`
+// returns, so a winit call would silently override any XShape rectangle we set
+// inside the frame.  Driving XShape directly from inside `update()` avoids
+// that race entirely.
+
+#[cfg(target_os = "linux")]
+struct LinuxX11State {
+    conn: x11rb::rust_connection::RustConnection,
+    screen_num: usize,
+    root: u32,
+    /// Cached XID of our overlay window; found lazily by WM_NAME search.
+    lasor_wid: Option<u32>,
+}
+
+#[cfg(target_os = "linux")]
+std::thread_local! {
+    static LINUX_X11: std::cell::RefCell<Option<LinuxX11State>> =
+        std::cell::RefCell::new(linux_x11_connect());
+}
+
+#[cfg(target_os = "linux")]
+fn linux_x11_connect() -> Option<LinuxX11State> {
+    x11rb::connect(None).ok().map(|(conn, screen_num)| {
+        let root = conn.setup().roots[screen_num].root;
+        LinuxX11State { conn, screen_num, root, lasor_wid: None }
+    })
+}
+
+/// Walk the X11 window tree to find the first window whose `WM_NAME` equals
+/// `name`.  Depth-limited to avoid stack overflow on exotic tree shapes.
+#[cfg(target_os = "linux")]
+fn find_window_by_name(
+    conn: &x11rb::rust_connection::RustConnection,
+    window: u32,
+    name: &[u8],
+    depth: u32,
+) -> Option<u32> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+
+    if depth > 12 {
+        return None;
+    }
+
+    // Check WM_NAME on this window.
+    if let Ok(cookie) =
+        conn.get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 32)
+    {
+        if let Ok(reply) = cookie.reply() {
+            if reply.value == name {
+                return Some(window);
+            }
+        }
+    }
+
+    // Walk children.
+    if let Ok(cookie) = conn.query_tree(window) {
+        if let Ok(tree) = cookie.reply() {
+            let children = tree.children; // move out before iterating
+            for child in children {
+                if let Some(w) = find_window_by_name(conn, child, name, depth + 1) {
+                    return Some(w);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Set the X11 input shape for the lasor overlay window.
+///
+/// In Idle / Laser mode only the toolbar rect receives mouse events; the rest
+/// of the overlay is fully click-through at the X11 level.  In Draw mode the
+/// entire window is interactive so the user can paint strokes.
+///
+/// This must be called on Linux **instead of** (not in addition to)
+/// `ctx.send_viewport_cmd(MousePassthrough(…))`.  The viewport-command path
+/// is flushed after `update()` returns and would override an in-frame
+/// `shape_rectangles` call on the same window.
+#[cfg(target_os = "linux")]
+pub fn update_input_shape(toolbar_rect: egui::Rect, draw_mode: bool, ppp: f32) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::shape::{ConnectionExt as ShapeExt, Kind, Op};
+    use x11rb::protocol::xproto::{ClipOrdering, ConnectionExt, Rectangle};
+
+    // Skip until the toolbar has been measured at least once.
+    if !toolbar_rect.min.is_finite() {
+        return;
+    }
+
+    LINUX_X11.with(|cell| {
+        let mut guard = cell.borrow_mut();
+
+        if guard.is_none() {
+            *guard = linux_x11_connect();
+        }
+
+        let state = match guard.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Lazily find the lasor window by WM_NAME ("lasor").
+        // Separated into two statements so the immutable borrow of
+        // `state.conn` and `state.root` ends before the mutable write to
+        // `state.lasor_wid`.
+        if state.lasor_wid.is_none() {
+            let wid = find_window_by_name(&state.conn, state.root, b"lasor", 0);
+            state.lasor_wid = wid;
+        }
+
+        let wid = match state.lasor_wid {
+            Some(w) => w,
+            None => return, // window not found yet; retry next frame
+        };
+
+        if draw_mode {
+            // Full-window input: a single large rectangle covers any display.
+            let rects = [Rectangle { x: 0, y: 0, width: 32767, height: 32767 }];
+            let _ = state
+                .conn
+                .shape_rectangles(Op::Set, Kind::Input, ClipOrdering::Unsorted, wid, 0, 0, &rects);
+        } else {
+            // Toolbar-only input: expand slightly so the hit-test matches the
+            // visual expand used in `should_passthrough`.
+            let r = toolbar_rect.expand(4.0);
+            let rects = [Rectangle {
+                x: (r.min.x * ppp).max(0.0) as i16,
+                y: (r.min.y * ppp).max(0.0) as i16,
+                width: (r.width() * ppp).max(1.0) as u16,
+                height: (r.height() * ppp).max(1.0) as u16,
+            }];
+            let _ = state
+                .conn
+                .shape_rectangles(Op::Set, Kind::Input, ClipOrdering::Unsorted, wid, 0, 0, &rects);
+        }
+
+        let _ = state.conn.flush();
+    });
 }
