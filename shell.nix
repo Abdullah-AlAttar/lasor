@@ -24,8 +24,7 @@ pkgs.mkShell {
 
     # OpenGL / Vulkan — required by wgpu to create a valid surface
     libGL
-    mesa                 # software rasterizer + OpenGL ICD
-    mesa.drivers         # DRI/DXVK drivers (Vulkan + GL ICDs)
+    mesa                 # software rasterizer + OpenGL ICD (includes drivers)
     vulkan-loader        # Vulkan loader (libvulkan.so)
     vulkan-validation-layers
 
@@ -47,14 +46,9 @@ pkgs.mkShell {
     libxkbcommon
     libGL
     mesa
-    mesa.drivers
     vulkan-loader
     fontconfig
     freetype
   ];
 
-  # Tell wgpu to prefer the OpenGL backend.  On a machine without a real GPU
-  # (VM, CI, headless nix-shell) Vulkan initialisation often fails with an
-  # "Invalid surface" error; the GL backend via Mesa works reliably instead.
-  WGPU_BACKEND = "gl";
 }

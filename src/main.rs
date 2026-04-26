@@ -48,20 +48,21 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    // On Linux, prefer X11 (or XWayland) over native Wayland whenever a
-    // DISPLAY is available.  winit defaults to Wayland when WAYLAND_DISPLAY
-    // is set, but that requires libwayland-client.so at runtime — a library
-    // that may not be present (e.g. inside a nix-shell that inherits the
-    // host's WAYLAND_DISPLAY without packaging the Wayland client lib).
-    // Forcing X11 when DISPLAY is set is safe: Wayland desktops with XWayland
-    // still expose a DISPLAY and work transparently via XWayland.
-    // Only on pure-Wayland sessions (DISPLAY unset) do we let winit choose.
+    // On Linux:
+    // 1. Use the glow (OpenGL/glutin) renderer instead of wgpu.  wgpu's GL
+    //    surface path fails on many X11 setups with "Invalid surface"; the
+    //    glow renderer uses glutin directly and is far more reliable on Linux.
+    // 2. Force X11 when DISPLAY is available so we don't accidentally try
+    //    Wayland inside a nix-shell that lacks libwayland-client.so.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("DISPLAY").is_some() {
-        use winit::platform::x11::EventLoopBuilderExtX11;
-        native_options.event_loop_builder = Some(Box::new(|builder| {
-            builder.with_x11();
-        }));
+    {
+        native_options.renderer = eframe::Renderer::Glow;
+        if std::env::var_os("DISPLAY").is_some() {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            native_options.event_loop_builder = Some(Box::new(|builder| {
+                builder.with_x11();
+            }));
+        }
     }
 
     eframe::run_native(
