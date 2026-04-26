@@ -86,6 +86,58 @@ pub fn cursor_info(ctx: &egui::Context, virt_x: i32, virt_y: i32) -> (egui::Pos2
 
 #[cfg(not(windows))]
 pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Pos2, f32) {
+    // On Linux with X11 we query the cursor position directly via XQueryPointer.
+    // This mirrors GetCursorPos on Windows: it works even when the overlay
+    // window has mouse passthrough enabled and receives no pointer events.
+    // Without this the egui fallback always returns Pos2::ZERO, which is never
+    // inside the toolbar rect, so the window stays permanently click-through.
+    #[cfg(target_os = "linux")]
+    {
+        use std::cell::RefCell;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        use x11rb::rust_connection::RustConnection;
+
+        thread_local! {
+            // Open once per thread and reuse; clear on error so we reconnect.
+            static X11: RefCell<Option<(RustConnection, usize)>> =
+                RefCell::new(x11rb::connect(None).ok());
+        }
+
+        let queried = X11.with(|cell| {
+            let mut guard = cell.borrow_mut();
+
+            // Lazy-reconnect if the connection was previously dropped.
+            if guard.is_none() {
+                *guard = x11rb::connect(None).ok();
+            }
+
+            if let Some((conn, screen_num)) = guard.as_ref() {
+                let root = conn.setup().roots[*screen_num].root;
+                match conn.query_pointer(root).and_then(|c| c.reply()) {
+                    Ok(reply) => {
+                        let ppp = ctx.pixels_per_point();
+                        return Some(egui::pos2(
+                            reply.root_x as f32 / ppp,
+                            reply.root_y as f32 / ppp,
+                        ));
+                    }
+                    Err(_) => {
+                        // Connection is dead; drop it so the next frame reconnects.
+                        *guard = None;
+                    }
+                }
+            }
+            None
+        });
+
+        if let Some(pos) = queried {
+            return (pos, 1.0);
+        }
+    }
+
+    // Fallback: egui's tracked pointer (works on Wayland or when X11 is
+    // unavailable; only valid while the window is receiving events).
     (
         ctx.input(|i| i.pointer.latest_pos())
             .unwrap_or(egui::Pos2::ZERO),
