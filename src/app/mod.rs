@@ -31,7 +31,9 @@ pub struct LasorApp {
     // ── Window positioning (Windows multi-monitor) ─────────────────────────
     pub virt_x: i32,
     pub virt_y: i32,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub virt_w: i32,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub virt_h: i32,
     positioned: bool,
 

@@ -32,7 +32,8 @@ fn main() -> eframe::Result<()> {
     #[cfg(not(windows))]
     let (virt_x, virt_y, virt_w, virt_h) = (0i32, 0i32, 0i32, 0i32);
 
-    let native_options = eframe::NativeOptions {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut native_options = eframe::NativeOptions {
         viewport: {
             let vp = egui::ViewportBuilder::default()
                 .with_decorations(false)
@@ -46,6 +47,16 @@ fn main() -> eframe::Result<()> {
         },
         ..Default::default()
     };
+
+    // On Linux without a Wayland compositor, force X11 to avoid a runtime
+    // error from winit trying and failing to connect to Wayland.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        native_options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+    }
 
     eframe::run_native(
         "lasor",
