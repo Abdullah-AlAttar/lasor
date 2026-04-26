@@ -88,7 +88,6 @@ pub fn cursor_info(ctx: &egui::Context, virt_x: i32, virt_y: i32) -> (egui::Pos2
 pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Pos2, f32) {
     #[cfg(target_os = "linux")]
     {
-        use x11rb::connection::Connection;
         use x11rb::protocol::xproto::ConnectionExt;
 
         let queried = LINUX_X11.with(|cell| {
@@ -172,6 +171,7 @@ std::thread_local! {
 
 #[cfg(target_os = "linux")]
 fn linux_x11_connect() -> Option<LinuxX11State> {
+    use x11rb::connection::Connection;
     x11rb::connect(None).ok().map(|(conn, screen_num)| {
         let root = conn.setup().roots[screen_num].root;
         LinuxX11State { conn, screen_num, root, lasor_wid: None }
@@ -233,8 +233,8 @@ fn find_window_by_name(
 #[cfg(target_os = "linux")]
 pub fn update_input_shape(toolbar_rect: egui::Rect, draw_mode: bool, ppp: f32) {
     use x11rb::connection::Connection;
-    use x11rb::protocol::shape::{ConnectionExt as ShapeExt, Kind, Op};
-    use x11rb::protocol::xproto::{ClipOrdering, ConnectionExt, Rectangle};
+    use x11rb::protocol::shape::{ConnectionExt as ShapeExt, SK, SO};
+    use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
 
     // Skip until the toolbar has been measured at least once.
     if !toolbar_rect.min.is_finite() {
@@ -272,7 +272,7 @@ pub fn update_input_shape(toolbar_rect: egui::Rect, draw_mode: bool, ppp: f32) {
             let rects = [Rectangle { x: 0, y: 0, width: 32767, height: 32767 }];
             let _ = state
                 .conn
-                .shape_rectangles(Op::Set, Kind::Input, ClipOrdering::Unsorted, wid, 0, 0, &rects);
+                .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, wid, 0, 0, &rects);
         } else {
             // Toolbar-only input: expand slightly so the hit-test matches the
             // visual expand used in `should_passthrough`.
@@ -285,7 +285,7 @@ pub fn update_input_shape(toolbar_rect: egui::Rect, draw_mode: bool, ppp: f32) {
             }];
             let _ = state
                 .conn
-                .shape_rectangles(Op::Set, Kind::Input, ClipOrdering::Unsorted, wid, 0, 0, &rects);
+                .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, wid, 0, 0, &rects);
         }
 
         let _ = state.conn.flush();
