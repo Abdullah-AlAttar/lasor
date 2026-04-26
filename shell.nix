@@ -12,18 +12,22 @@ pkgs.mkShell {
 
   buildInputs = with pkgs; [
     # X11 backend (winit / eframe)
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXrandr
-    xorg.libXi
-    xorg.libxcb
+    libx11
+    libxcursor
+    libxrandr
+    libxi
+    libxcb
 
     # Wayland backend (optional; winit falls back to X11 via DISPLAY check)
     wayland
     libxkbcommon
 
-    # OpenGL / wgpu
+    # OpenGL / Vulkan — required by wgpu to create a valid surface
     libGL
+    mesa                 # software rasterizer + OpenGL ICD
+    mesa.drivers         # DRI/DXVK drivers (Vulkan + GL ICDs)
+    vulkan-loader        # Vulkan loader (libvulkan.so)
+    vulkan-validation-layers
 
     # Font rendering
     fontconfig
@@ -34,15 +38,23 @@ pkgs.mkShell {
   # Without this the .so files are not on LD_LIBRARY_PATH even though they
   # are in buildInputs, because mkShell does not set rpath.
   LD_LIBRARY_PATH = with pkgs; pkgs.lib.makeLibraryPath [
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXrandr
-    xorg.libXi
-    xorg.libxcb
+    libx11
+    libxcursor
+    libxrandr
+    libxi
+    libxcb
     wayland
     libxkbcommon
     libGL
+    mesa
+    mesa.drivers
+    vulkan-loader
     fontconfig
     freetype
   ];
+
+  # Tell wgpu to prefer the OpenGL backend.  On a machine without a real GPU
+  # (VM, CI, headless nix-shell) Vulkan initialisation often fails with an
+  # "Invalid surface" error; the GL backend via Mesa works reliably instead.
+  WGPU_BACKEND = "gl";
 }
