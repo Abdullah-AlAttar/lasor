@@ -157,7 +157,6 @@ pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Po
 #[cfg(target_os = "linux")]
 struct LinuxX11State {
     conn: x11rb::rust_connection::RustConnection,
-    screen_num: usize,
     root: u32,
     /// Cached XID of our overlay window; found lazily by WM_NAME search.
     lasor_wid: Option<u32>,
@@ -174,7 +173,7 @@ fn linux_x11_connect() -> Option<LinuxX11State> {
     use x11rb::connection::Connection;
     x11rb::connect(None).ok().map(|(conn, screen_num)| {
         let root = conn.setup().roots[screen_num].root;
-        LinuxX11State { conn, screen_num, root, lasor_wid: None }
+        LinuxX11State { conn, root, lasor_wid: None }
     })
 }
 
@@ -187,7 +186,6 @@ fn find_window_by_name(
     name: &[u8],
     depth: u32,
 ) -> Option<u32> {
-    use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
     if depth > 12 {
