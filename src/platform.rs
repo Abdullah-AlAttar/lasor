@@ -112,27 +112,39 @@ pub fn cursor_info(ctx: &egui::Context, _virt_x: i32, _virt_y: i32) -> (egui::Po
                 *guard = x11rb::connect(None).ok();
             }
 
-            if let Some((conn, screen_num)) = guard.as_ref() {
+            // Use a flag so we can drop the immutable borrow on `guard`
+            // (held by `conn`) before mutating it.  The borrow checker
+            // requires the immutable borrow to end before `*guard = None`.
+            let mut clear = false;
+            let result = if let Some((conn, screen_num)) = guard.as_ref() {
                 let root = conn.setup().roots[*screen_num].root;
                 match conn.query_pointer(root) {
                     Ok(cookie) => match cookie.reply() {
                         Ok(reply) => {
                             let ppp = ctx.pixels_per_point();
-                            return Some(egui::pos2(
+                            Some(egui::pos2(
                                 reply.root_x as f32 / ppp,
                                 reply.root_y as f32 / ppp,
-                            ));
+                            ))
                         }
                         Err(_) => {
-                            *guard = None;
+                            clear = true;
+                            None
                         }
                     },
                     Err(_) => {
-                        *guard = None;
+                        clear = true;
+                        None
                     }
                 }
+            } else {
+                None
+            };
+            // Immutable borrow on `guard` has ended; safe to mutate now.
+            if clear {
+                *guard = None;
             }
-            None
+            result
         });
 
         if let Some(pos) = queried {
