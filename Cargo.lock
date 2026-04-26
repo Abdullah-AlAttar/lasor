@@ -1684,6 +1684,7 @@ dependencies = [
  "toml",
  "windows-sys 0.59.0",
  "winit",
+ "x11rb",
 ]
 
 [[package]]

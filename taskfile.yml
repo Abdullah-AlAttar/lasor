@@ -1,0 +1,9 @@
+version: '3'
+
+tasks:
+  release:
+    desc: Build release binaries for all platforms
+    cmds:
+    - git tag v0.2.0
+    - git push
+    - git push origin v0.2.0

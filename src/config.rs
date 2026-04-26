@@ -36,13 +36,13 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            dot_radius: 10.0,
+            dot_radius: 6.0,
             dot_color: [220, 30, 30],
             dot_alpha: 220,
             dot_stroke_width: 2.0,
             dot_stroke_alpha: 180,
             trail_duration_secs: 1.8,
-            trail_max_radius: 12.0,
+            trail_max_radius: 7.0,
             trail_min_radius: 3.0,
             trail_alpha_max: 180,
             draw_color: [255, 200, 0],

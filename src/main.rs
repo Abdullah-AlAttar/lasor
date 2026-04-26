@@ -39,7 +39,13 @@ fn main() -> eframe::Result<()> {
                 .with_decorations(false)
                 .with_transparent(true)
                 .with_always_on_top()
-                .with_mouse_passthrough(true);
+                // On Linux, mouse passthrough is managed via X11 input shape
+                // (platform::update_input_shape called each frame).  Setting
+                // with_mouse_passthrough here would conflict: winit re-applies
+                // the passthrough state after every update() call and would
+                // override our per-frame shape_rectangles calls.
+                // On Windows, we use with_mouse_passthrough + send_viewport_cmd.
+                .with_mouse_passthrough(cfg!(windows));
             // Non-Windows: use winit fullscreen which handles multi-monitor correctly.
             #[cfg(not(windows))]
             let vp = vp.with_fullscreen(true);
